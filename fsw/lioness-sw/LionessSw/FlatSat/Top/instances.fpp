@@ -69,14 +69,26 @@ module FlatSat {
 
   instance timer: Svc.LinuxTimer base id 0x10013000
 
-  instance comDriver: Drv.TcpClient base id 0x10014000
+  # Primary com stack UART driver (feeds the core ComCcsds subtopology)
+  instance comDriver: Drv.LinuxUartDriver base id 0x10014000
 
   instance watchdog: Components.fsw_watchdog base id 0x10015000
 
   instance watchdogGpio: Drv.LinuxGpioDriver  base id 0x10016000
 
-  instance burnwire: Components.Burnwire base id 0x10017000
+  # Secondary com stack UART driver (feeds the ComCcsdsRoarFM subtopology;
+  # stands in for the future Roar FM radio during bring-up)
+  instance roarfmDriver: Drv.LinuxUartDriver base id 0x10017000
 
-  instance gpioDriver: Drv.LinuxGpioDriver base id 0x10018000
+  # ComSplitters fan-out events and telemetry to both com stacks so that
+  # downlink traffic is mirrored on the primary (ComCcsds) and the
+  # ComCcsdsRoarFM stack.
+  instance comSplitterEvents: Svc.ComSplitter base id 0x10018000
+
+  instance comSplitterTelemetry: Svc.ComSplitter base id 0x10019000
+
+  instance burnwire: Components.Burnwire base id 0x1001A000
+
+  instance gpioDriver: Drv.LinuxGpioDriver base id 0x1001B000
 
 }

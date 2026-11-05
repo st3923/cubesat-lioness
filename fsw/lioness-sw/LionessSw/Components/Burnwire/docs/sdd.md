@@ -34,7 +34,7 @@ The Burnwire component controls a burnwire actuator via a GPIO driver. It suppor
 | Name           | Description                                 |
 |----------------|---------------------------------------------|
 | START_BURNWIRE | Starts the burnwire for a specified duration |
-| STOP_BURNWIRE  | Stops the burnwire (optional, if implemented)|
+| STOP_BURNWIRE  | Stops the burnwire immediately (always drives the GPIO LOW) |
 
 ---
 
@@ -45,6 +45,7 @@ The Burnwire component controls a burnwire actuator via a GPIO driver. It suppor
 | SetBurnwireState  | Emitted when burnwire turns ON or OFF                         |
 | SafetyTimerState  | Emits the requested burn duration when burn starts            |
 | BurnwireEndCount  | Reports the actual burn duration when burnwire stops          |
+| GpioWriteFailed   | Warning when the GPIO driver returns a non-OK status          |
 
 ---
 
@@ -68,29 +69,48 @@ The Burnwire component controls a burnwire actuator via a GPIO driver. It suppor
 
 ## Behavior
 
-1. **Command Handling**
-   - `START_BURNWIRE` command:
-     - Retrieves `SAFETY_TIMER` parameter
-     - Clamps requested duration to maximum allowed value
-     - Sets `m_timeout`
-     - Resets `m_timer`
-     - Sets burnwire state to ON
-     - Emits `SafetyTimerState` event
+1. **`START_BURNWIRE(durationS)`**
+   - Rejects `durationS == 0` with `VALIDATION_ERROR`
+   - Rejects the command with `BUSY` if a burn is already in progress
+   - Clamps `durationS` to `SAFETY_TIMER` (30 s fallback if parameters were never loaded)
+   - Sets `m_timeout`, resets `m_timer`, sets state ON
+   - Emits `SafetyTimerState`
 
-2. **Scheduled Execution (`schedIn_handler`)**
-   - Runs at a fixed rate (nominally 1 Hz)
-   - If burnwire is ON:
-     - Increment `m_timer`
-     - On first tick:
-       - Set GPIO HIGH
-       - Emit `SetBurnwireState(ON)`
-     - When `m_timer >= m_timeout`:
-       - Set GPIO LOW
-       - Emit `BurnwireEndCount`
-       - Emit `SetBurnwireState(OFF)`
-       - Reset state and timer
+2. **`schedIn` (rate group, nominally 1 Hz)**
+   - Does nothing while OFF
+   - First tick after the command: GPIO HIGH, emits `SetBurnwireState(ON)`
+   - After the GPIO has been HIGH for `m_timeout` ticks: GPIO LOW, emits
+     `BurnwireEndCount` and `SetBurnwireState(OFF)`, returns to idle
+
+3. **`STOP_BURNWIRE`**
+   - If burning: same shutdown as the timeout path (reports ticks burned so far)
+   - If idle: still drives the GPIO LOW, emits no events
+
+4. **GPIO failures**: any non-`OP_OK` status from the driver emits
+   `GpioWriteFailed`. The timer keeps running so a LOW is still commanded.
+
+Commands and `schedIn` are `guarded` (share a component mutex) because they
+run on the command dispatcher and rate group threads respectively.
 
 ---
+
+## Unit Tests
+
+Located in `test/ut/`, run with `fprime-util check` from this directory.
+
+| Test | Covers |
+|------|--------|
+| IdleDoesNothing | No GPIO activity without a command |
+| NominalBurn | BW-001..006: HIGH for exactly `durationS` ticks, then LOW |
+| DefaultSafetyTimerClamp | Clamp to 30 s when parameter not loaded |
+| ConfiguredSafetyTimerClamp | Clamp to a commanded `SAFETY_TIMER` value |
+| ZeroDurationRejected | `durationS == 0` rejected, no GPIO |
+| StartWhileBurningRejected | Second start returns BUSY, original burn unaffected |
+| StopDuringBurn | Early stop drives LOW and reports elapsed ticks |
+| StopBeforeFirstTick | Stop cancels a pending burn |
+| StopWhileIdle | Stop is idempotent |
+| BurnAgainAfterCompletion | Component can burn again after finishing |
+| GpioFailureReported | Driver errors emit `GpioWriteFailed` |
 
 ---
 
